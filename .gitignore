@@ -22,6 +22,10 @@ build/
 .DS_Store
 Thumbs.db
 
+# Build docs (not for repo)
+BUILD_GUIDE.md
+plan.md
+
 # IDE
 .vscode/
 .idea/
