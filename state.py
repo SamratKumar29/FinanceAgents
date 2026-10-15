@@ -1,32 +1,25 @@
 """
-state.py -- The shared state schema for the FinanceAgents v2 agentic system.
-
-Includes UserProfile for Investment Mode, conversation history,
-tool tracking, and safety caps. Every node reads from and writes to this state.
+state.py -- State schema for the analysis graph and the user profile used by Investment Mode.
 """
-import operator
-from typing import Annotated, TypedDict, Optional
+from typing import TypedDict
 
 
-# ---------------------------------------------------------------------------
-# User Profile (for Investment Mode onboarding)
-# ---------------------------------------------------------------------------
 class UserProfile(TypedDict, total=False):
-    location: str               # country code: "IN", "US", "GB", etc.
+    location: str               # country name as entered, title-cased
     base_currency: str          # "INR" or "USD"
-    budget: float               # investable capital
+    budget: float               # investable capital in base_currency (> 0)
     budget_type: str            # "lumpsum" or "monthly"
-    goals: list[str]            # ["retirement", "wealth_growth", "passive_income", etc.]
+    goals: list[str]
     risk_tolerance: str         # "conservative", "moderate", "aggressive"
-    investment_horizon: str     # "1 year", "5 years", "20 years"
-    preferred_markets: list[str]  # ["US", "IN", "both"]
+    investment_horizon: str     # e.g. "5 years"
+    horizon_years: float
+    preferred_markets: list[str]  # subset of ["us", "india"]
     preferred_sectors: list[str]
-    num_positions: int          # how many stocks to suggest
-    existing_investments: list  # [{"ticker": "AAPL", "shares": 10, "value": 1500}]
+    num_positions: int
+    existing_investments: list
     completed_onboarding: bool
 
 
-# Default empty profile
 def empty_profile() -> UserProfile:
     return UserProfile(
         location="",
@@ -36,76 +29,27 @@ def empty_profile() -> UserProfile:
         goals=[],
         risk_tolerance="",
         investment_horizon="",
+        horizon_years=0.0,
         preferred_markets=[],
         preferred_sectors=[],
-        num_positions=5,
+        num_positions=0,  # 0 = not answered yet
         existing_investments=[],
         completed_onboarding=False,
     )
 
 
-# ---------------------------------------------------------------------------
-# Message (for conversation history)
-# ---------------------------------------------------------------------------
-class Message(TypedDict):
-    role: str       # "user", "assistant", "system"
-    content: str
-
-
-# ---------------------------------------------------------------------------
-# Main State (shared across all nodes)
-# ---------------------------------------------------------------------------
-class TeamState(TypedDict):
-    # --- Core fields ---
-    query: str                          # the user's question
-    ticker: str                         # resolved ticker symbol
-    ticker_context: str                 # context from resolver (e.g. "GTA 6 catalyst")
-    investment_research: str            # filled by Investment Analyst
-    risk_assessment: str                # filled by Risk Specialist
-    final_brief: str                    # filled by CIO synthesis
-    completed_agents: Annotated[list, operator.add]
-
-    # --- User profile (Investment Mode) ---
+class TeamState(TypedDict, total=False):
+    query: str
     user_profile: UserProfile
-
-    # --- Conversation ---
-    messages: Annotated[list, operator.add]  # conversation history
-
-    # --- Mode & routing ---
-    mode: str                           # "idle", "investment", "analysis"
-    router_decision: str                # raw router LLM output
-
-    # --- Safety caps ---
-    loop_count: int                     # synthesis loop counter
-    tool_call_count: int                # tool call counter (prevents infinite loops)
-
-    # --- Tool calling ---
-    tools_enabled: bool                 # whether tool calling is available
+    ticker: str
+    ticker_context: str
+    ticker_result: dict
+    data: dict
+    data_gaps: list[str]
+    sources: list[str]
+    final_brief: str
+    llm_trace: list[dict]
 
 
-# --- Safety caps ---
-MAX_LOOPS = 4              # max CIO synthesis loops
-MAX_TOOL_CALLS = 10        # max tool calls per agent turn
-
-
-# ---------------------------------------------------------------------------
-# State initializer
-# ---------------------------------------------------------------------------
-def initial_state(query: str = "", ticker: str = "") -> dict:
-    """Create a fresh initial state dict."""
-    return {
-        "query": query,
-        "ticker": ticker,
-        "ticker_context": "",
-        "investment_research": "",
-        "risk_assessment": "",
-        "final_brief": "",
-        "completed_agents": [],
-        "user_profile": empty_profile(),
-        "messages": [],
-        "mode": "idle",
-        "router_decision": "",
-        "loop_count": 0,
-        "tool_call_count": 0,
-        "tools_enabled": True,
-    }
+def initial_state(query: str = "", user_profile: UserProfile | None = None) -> TeamState:
+    return TeamState(query=query, user_profile=user_profile or empty_profile())

@@ -1,109 +1,84 @@
 """
-main.py -- CLI entry point for FinanceAgents v2.
+main.py -- CLI entry point for FinanceAgents.
 
 Usage:
     python main.py "Should I invest in Apple?"
-    python main.py --mode investment
     python main.py --ticker RELIANCE.NS
+    python main.py --mode investment [--save profile.json]
 """
 import argparse
+import logging
 import sys
-import json
+
+import config
+from errors import FinanceAgentsError
 from graph import build_graph
-from state import initial_state, empty_profile
+from onboarding import apply_answer, is_complete, next_field, question_text
 from portfolio_allocator import suggest_portfolio
-from session import save_session, get_profile_summary
+from session import get_profile_summary, save_session
+from state import empty_profile, initial_state
 
 
-def run_analysis(query: str):
-    """Run analysis mode from CLI."""
-    graph = build_graph()
+def run_analysis(query: str, settings) -> None:
     print(f"\n🔍 Researching: {query}\n")
-    result = graph.invoke(initial_state(query=query))
-    print(f"📊 Ticker: {result.get('ticker', 'N/A')}")
-    print(f"\n{'='*60}")
-    print(result.get("final_brief", "No analysis available."))
-    print(f"{'='*60}\n")
+    result = build_graph(settings).invoke(initial_state(query=query))
+    print(f"📊 Ticker: {result.get('ticker') or 'N/A'}")
+    if result.get("data_gaps"):
+        print(f"⚠️  Unavailable data: {', '.join(result['data_gaps'])}")
+    print(f"\n{'=' * 60}\n{result['final_brief']}\n{'=' * 60}")
+    for t in result.get("llm_trace", []):
+        print(f"(answered by {t['served_model']} after {len(t['attempts'])} attempt(s))")
 
 
-def run_investment():
-    """Run investment mode onboarding from CLI."""
-    profile = empty_profile()
-    questions = [
-        ("location", "Where are you based? (e.g., India, US, UK): "),
-        ("base_currency", "Currency preference (INR or USD): "),
-        ("budget", "Investable budget (number only): "),
-        ("budget_type", "Lumpsum or monthly? "),
-        ("goals", "Investment goals (comma-separated, e.g., retirement, wealth growth): "),
-        ("risk_tolerance", "Risk tolerance (conservative/moderate/aggressive): "),
-        ("investment_horizon", "Investment horizon (e.g., 5 years): "),
-        ("num_positions", "How many positions? (number): "),
-        ("preferred_markets", "Markets (US/India/both): "),
-        ("existing_investments", "Existing investments (or 'none'): "),
-    ]
-
-    print("\n💼 Investment Mode — Let's build your portfolio.\n")
-    for field, question in questions:
-        answer = input(question).strip()
-
-        if field == "budget":
-            import re
-            nums = re.findall(r'[\d,]+\.?\d*', answer.replace(",", ""))
-            profile["budget"] = float(nums[0]) if nums else 0
-        elif field == "num_positions":
-            import re
-            nums = re.findall(r'\d+', answer)
-            profile["num_positions"] = int(nums[0]) if nums else 5
-        elif field in ("goals", "preferred_markets", "preferred_sectors"):
-            profile[field] = [x.strip().lower() for x in answer.split(",")]
-        elif field == "existing_investments":
-            profile[field] = [] if answer.lower() in ("none", "no") else [{"description": answer}]
-        elif field == "location":
-            profile["location"] = answer.title()
-            loc = answer.lower()
-            if "india" in loc:
-                profile["base_currency"] = "INR"
-            elif "us" in loc or "usa" in loc or "united states" in loc:
-                profile["base_currency"] = "USD"
-        elif field == "base_currency":
-            cur = answer.upper().strip()
-            profile["base_currency"] = "INR" if "INR" in cur else "USD" if "USD" in cur else cur[:3]
-        else:
-            profile[field] = answer
-
+def run_investment(settings, save_path: str | None) -> None:
+    profile, answered = empty_profile(), set()
+    print("\n💼 Investment Mode — let's build an educational model allocation.\n")
+    while (field := next_field(profile, answered)) is not None:
+        profile, error = apply_answer(profile, field, input(question_text(field) + " "))
+        if error:
+            print(f"  ↳ {error}")
+            continue
+        answered.add(field)
+    if not is_complete(profile):
+        raise SystemExit("Profile incomplete.")
     profile["completed_onboarding"] = True
-    print(f"\n{get_profile_summary(profile)}\n")
-    print("Generating your portfolio...\n")
+    print(f"\n{get_profile_summary(profile)}\n\nGenerating the model allocation...\n")
 
-    portfolio = suggest_portfolio(profile)
-    currency = portfolio.get("currency", "USD")
-    for p in portfolio.get("positions", []):
-        print(f"  {p.get('ticker', 'N/A'):8s} | {p.get('allocation_pct', 0):5.1f}% | {currency} {p.get('amount', 0):>12,.0f} | {p.get('company', '')}")
-    print(f"\n  Total: {currency} {portfolio.get('total_amount', 0):,.0f}")
-    print(f"\n  {portfolio.get('summary', '')}")
-    print(f"\n⚠️  {portfolio.get('disclaimer', '')}\n")
-
-    # Save profile
-    save_session(profile, filepath="profile.json")
-    print("💾 Profile saved to profile.json\n")
+    portfolio = suggest_portfolio(profile, settings)
+    cur = portfolio["currency"]
+    for p in portfolio["positions"]:
+        print(f"  {p['ticker']:12s} | {p['allocation_pct']:6.2f}% | {cur} {p['amount']:>14,.2f} | {p['company']}")
+    print(f"\n  Total: {cur} {portfolio['total_amount']:,.2f}\n\n  {portfolio['summary']}\n\n⚠️  {portfolio['disclaimer']}\n")
+    if save_path:
+        save_session(profile, filepath=save_path)
+        print(f"💾 Profile saved to {save_path} (contains personal financial data)\n")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="FinanceAgents v2 — AI Investment Analysis Team")
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="FinanceAgents — LLM-assisted stock briefs")
     parser.add_argument("query", nargs="?", help="Stock analysis query (Analysis Mode)")
-    parser.add_argument("--mode", choices=["analysis", "investment"], help="Mode to run")
-    parser.add_argument("--ticker", help="Direct ticker to analyze (bypasses natural language)")
-    args = parser.parse_args()
+    parser.add_argument("--mode", choices=["analysis", "investment"])
+    parser.add_argument("--ticker", help="Analyze an explicit ticker")
+    parser.add_argument("--save", metavar="PATH", help="Investment Mode: save the profile JSON to PATH")
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
-    if args.ticker:
-        run_analysis(f"Analyze {args.ticker}")
-    elif args.mode == "investment":
-        run_investment()
-    elif args.query:
-        run_analysis(args.query)
-    else:
-        parser.print_help()
+    settings = config.server_settings()
+    try:
+        if args.ticker:
+            run_analysis(f"Analyze {args.ticker}", settings)
+        elif args.mode == "investment":
+            run_investment(settings, args.save)
+        elif args.query:
+            run_analysis(args.query, settings)
+        else:
+            parser.print_help()
+            return 2
+    except FinanceAgentsError as e:
+        print(f"❌ {e.user_message}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

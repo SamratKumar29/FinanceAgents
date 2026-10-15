@@ -29,3 +29,12 @@ plan.md
 # IDE
 .vscode/
 .idea/
+
+# Personal data written by the CLI (--save)
+profile.json
+*_profile.json
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.cortex/

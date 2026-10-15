@@ -1,22 +1,24 @@
 """
-ticker_resolver.py -- Resolves natural language company references to stock tickers.
+ticker_resolver.py -- Resolve natural-language company references to stock tickers.
 
-Uses an LLM to extract the intended company name from user queries, then
-yfinance's Search API to find the correct ticker symbol. This fixes the
-"Take Two before GTA 6" → TTWO problem that regex extraction cannot handle.
-
-Usage:
-    result = resolve_ticker("I was thinking of investing in Take Two before GTA 6")
-    # → TickerResult(ticker="TTWO", company="Take-Two Interactive Software, Inc.", exchange="NMS")
+Order: LLM extraction (company + explicit ticker) -> validate explicit ticker -> Yahoo search on
+the company name -> word-boundary static map -> all-caps regex (with stopwords). Every candidate is
+validated against Yahoo before it is returned; weak matches abstain instead of guessing.
 """
-import re
+from __future__ import annotations
+
 import json
-from dataclasses import dataclass, asdict
-from typing import Optional
+import logging
+import re
+from dataclasses import asdict, dataclass, field
+from typing import Callable, Optional
 
 import yfinance as yf
-from openai import OpenAI
-import config
+
+from errors import LLMAuthError, LLMBudgetError, LLMError
+from llm import Settings, complete
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -25,8 +27,10 @@ class TickerResult:
     company: str
     exchange: str
     confidence: str  # "high", "medium", "low"
-    context: str     # any additional context from the query (e.g., "GTA 6 launch catalyst")
-    currency: str    # "USD", "INR", etc.
+    context: str     # why the user asked (e.g. "GTA 6 launch catalyst")
+    currency: str
+    source: str = ""  # which resolver stage produced it
+    candidates: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -48,54 +52,17 @@ Respond with ONLY a JSON object (no markdown, no explanation):
 Rules:
 - If the user mentions a clear ticker symbol (all-caps like TSLA, AAPL, INFY), put it in ticker_if_known
 - If they mention a company name (like "Take Two", "Nvidia", "Reliance"), put it in company_name
-- If they mention both, include both
-- The "context" field captures WHY they're asking — keep it to a short phrase (e.g. "GTA 6 launch catalyst")
-- Do NOT write long explanations or sentences in any field
-- Do NOT fabricate information — if unsure, leave fields empty"""
+- The "context" field captures WHY they're asking, as a short phrase
+- Do NOT fabricate information; if unsure, leave fields empty"""
 
+EMPTY_EXTRACTION = {"company_name": "", "ticker_if_known": "", "context": ""}
 
-def _llm_extract(query: str) -> dict:
-    """Use LLM to extract company name and context from natural language."""
-    client = OpenAI(base_url=config.OPENAI_BASE_URL, api_key=config.OPENAI_API_KEY)
-
-    # Check if API key is valid
-    if not config.OPENAI_API_KEY:
-        return {"company_name": "", "ticker_if_known": "", "context": ""}
-
-    try:
-        response = client.chat.completions.create(
-            model=config.LLM_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": query},
-            ],
-            temperature=0,
-            max_tokens=400,
-        )
-        raw_content = response.choices[0].message.content
-        if not raw_content:
-            return {"company_name": "", "ticker_if_known": "", "context": ""}
-        text = raw_content.strip()
-        # Strip markdown code fences if present
-        text = re.sub(r'^```json\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        # Try to find the JSON object even if truncated
-        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if json_match:
-            text = json_match.group(0)
-        parsed = json.loads(text)
-        # Ensure no None values
-        return {k: (v or "") for k, v in parsed.items()}
-    except (json.JSONDecodeError, Exception) as e:
-        return {"company_name": "", "ticker_if_known": "", "context": ""}
-
-
-# Known company name → ticker mappings for common cases (fallback when LLM fails)
+# Known company name -> ticker. Matched on word boundaries only.
 KNOWN_COMPANIES = {
     "take two": "TTWO",
     "take-two": "TTWO",
     "take two interactive": "TTWO",
-    "rockstar": "TTWO",
+    "rockstar games": "TTWO",
     "nvidia": "NVDA",
     "apple": "AAPL",
     "tesla": "TSLA",
@@ -103,240 +70,227 @@ KNOWN_COMPANIES = {
     "google": "GOOGL",
     "alphabet": "GOOGL",
     "amazon": "AMZN",
-    "meta": "META",
+    "meta platforms": "META",
     "facebook": "META",
     "reliance": "RELIANCE.NS",
     "reliance industries": "RELIANCE.NS",
     "tata motors": "TATAMOTORS.NS",
-    "tata": "TATAMOTORS.NS",
+    "tata steel": "TATASTEEL.NS",
     "infosys": "INFY.NS",
-    "hdfc": "HDFCBANK.NS",
-    "icici": "ICICIBANK.NS",
+    "hdfc bank": "HDFCBANK.NS",
+    "icici bank": "ICICIBANK.NS",
     "wipro": "WIPRO.NS",
     "byd": "1211.HK",
-    "samsung": "005930.KS",
+    "samsung electronics": "005930.KS",
     "sony": "SONY",
     "nintendo": "NTDOY",
     "electronic arts": "EA",
     "ubisoft": "UBI.PA",
-    "activision": "ATVI",
 }
 
+# All-caps words that are not tickers in ordinary finance questions.
+STOPWORDS = frozenset({
+    "CEO", "CFO", "CTO", "COO", "ETF", "ETFS", "PE", "EPS", "GTA", "IPO", "AI", "USA", "US", "UK", "EU",
+    "USD", "INR", "EUR", "GBP", "GDP", "SIP", "NAV", "ROI", "ROE", "YOY", "QOQ", "FY", "Q1", "Q2", "Q3",
+    "Q4", "NYSE", "NSE", "BSE", "SEC", "SEBI", "API", "LLM", "OK", "IT", "IS", "I", "A", "THE", "AND",
+    "OR", "FOR", "TO", "BUY", "SELL", "HOLD", "DCF", "EBITDA", "PEG", "ESG", "FD", "PPF", "NRI", "YTD",
+})
 
-def _known_company_fallback(query: str) -> Optional[str]:
-    """Check if the query mentions a known company name."""
-    query_lower = query.lower()
-    # Check from longest to shortest keys for best match
-    for name in sorted(KNOWN_COMPANIES.keys(), key=len, reverse=True):
-        if name in query_lower:
-            return KNOWN_COMPANIES[name]
-    return None
+# Yahoo exchange suffixes; any other single-letter suffix is a share class (BRK.B -> BRK-B).
+EXCHANGE_SUFFIXES = frozenset({
+    "NS", "BO", "L", "HK", "KS", "KQ", "PA", "DE", "F", "AS", "MI", "MC", "SW", "TO", "V", "AX", "T",
+    "SS", "SZ", "SI", "TW", "SA", "MX", "ST", "OL", "CO", "HE", "IR", "BR", "VI", "LS", "NZ", "JK",
+})
+
+INDIA_HINTS = ("india", "reliance", "tata", "infosys", "hdfc", "icici", "wipro", "nifty", "sensex")
+
+_TICKER_RE = re.compile(r"^([A-Z0-9]{1,10})(?:[.\-]([A-Z]{1,3}))?")
 
 
-def _regex_fallback(query: str) -> Optional[str]:
-    """Fallback: look for an all-caps ticker pattern in the query."""
-    match = re.search(r'\b([A-Z]{2,10}(?:\.NS|\.BO)?)\b', query)
-    return match.group(1) if match else None
+def normalize_ticker(raw: str) -> str:
+    """Upper-case, strip decorations, keep exchange suffixes and share classes."""
+    m = _TICKER_RE.match((raw or "").strip().upper())
+    if not m:
+        return ""
+    base, suffix = m.group(1), m.group(2)
+    if not suffix:
+        return base
+    return f"{base}.{suffix}" if suffix in EXCHANGE_SUFFIXES else f"{base}-{suffix}"
 
 
-def _search_yfinance(company_name: str, max_results: int = 10) -> list[dict]:
-    """Search yfinance for matching equities."""
+def _parse_extraction(text: str) -> dict:
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+    m = re.search(r"\{[^{}]*\}", text, re.DOTALL)
+    if not m:
+        raise ValueError("no JSON object in output")
+    parsed = json.loads(m.group(0))
+    if not isinstance(parsed, dict):
+        raise ValueError("JSON is not an object")
+    return {k: str(parsed.get(k) or "").strip() for k in EMPTY_EXTRACTION}
+
+
+def llm_extract(query: str, settings: Optional[Settings]) -> dict:
+    """LLM extraction. Auth/budget errors propagate; transient failures degrade to fallbacks."""
+    if settings is None or not settings.api_key:
+        return dict(EMPTY_EXTRACTION)
+    try:
+        result = complete(
+            settings,
+            [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": query}],
+            validator=_parse_extraction,
+            temperature=0,
+            max_tokens=1000,  # reasoning models need headroom before the JSON appears
+        )
+    except (LLMAuthError, LLMBudgetError):
+        raise
+    except LLMError as e:
+        log.warning("ticker extraction LLM failed; using fallbacks: %s", e)
+        return dict(EMPTY_EXTRACTION)
+    return _parse_extraction(result.text)
+
+
+def known_company_matches(query: str) -> list[str]:
+    q = query.lower()
+    hits = []
+    for name in sorted(KNOWN_COMPANIES, key=len, reverse=True):
+        if re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", q):
+            ticker = KNOWN_COMPANIES[name]
+            if ticker not in hits:
+                hits.append(ticker)
+            q = q.replace(name, " ")  # prevent shorter overlapping names matching too
+    return hits
+
+
+def regex_candidates(query: str) -> list[str]:
+    out = []
+    for m in re.finditer(r"(?<![A-Za-z0-9])([A-Z]{2,5}(?:\.[A-Z]{1,2})?)(?![A-Za-z0-9])", query):
+        token = m.group(1)
+        if token.split(".")[0] in STOPWORDS:
+            continue
+        t = normalize_ticker(token)
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def lookup_info(ticker: str) -> Optional[dict]:
+    """Return Yahoo info for a real listing, else None."""
+    try:
+        info = yf.Ticker(ticker).info or {}
+    except Exception as e:
+        log.info("ticker lookup failed for %s: %s", ticker, e)
+        return None
+    return info if info.get("shortName") or info.get("longName") else None
+
+
+def search_yahoo(company_name: str, max_results: int = 10) -> list[dict]:
     if not company_name:
         return []
     try:
-        search = yf.Search(company_name, max_results=max_results)
-        results = []
-        for quote in search.quotes:
-            if quote.get("quoteType") == "EQUITY":
-                results.append({
-                    "symbol": quote.get("symbol", ""),
-                    "shortname": quote.get("shortname", ""),
-                    "longname": quote.get("longname", ""),
-                    "exchange": quote.get("exchange", ""),
-                    "quoteType": quote.get("quoteType", ""),
-                })
-        return results
-    except Exception:
+        quotes = yf.Search(company_name, max_results=max_results).quotes
+    except Exception as e:
+        log.info("Yahoo search failed for %r: %s", company_name, e)
         return []
+    return [
+        {
+            "symbol": q.get("symbol", ""),
+            "shortname": q.get("shortname", "") or "",
+            "longname": q.get("longname", "") or "",
+            "exchange": q.get("exchange", "") or "",
+        }
+        for q in quotes
+        if q.get("quoteType") == "EQUITY"
+    ]
 
 
-def _detect_currency(ticker: str, exchange: str) -> str:
-    """Detect the currency based on exchange or ticker suffix."""
-    if ticker.endswith(".NS") or ticker.endswith(".BO"):
-        return "INR"
-    exchange = exchange.upper() if exchange else ""
-    if exchange in ("NSI", "BSE", "NSE"):
-        return "INR"
-    return "USD"
+MIN_MATCH_SCORE = 8  # a name match is required; exchange preference alone never wins
 
 
-def _pick_best_match(results: list[dict], company_hint: str) -> Optional[dict]:
-    """Pick the best match from yfinance search results."""
-    if not results:
-        return None
-
-    company_lower = company_hint.lower() if company_hint else ""
-
-    # Score each result
-    scored = []
-    for r in results:
-        score = 0
-        longname = (r.get("longname") or "").lower()
-        shortname = (r.get("shortname") or "").lower()
-
-        # Exact or partial name match
-        if company_lower and company_lower in longname:
-            score += 10
-        if company_lower and company_lower in shortname:
-            score += 8
-
-        # Prefer major exchanges
-        exchange = r.get("exchange", "").upper()
-        if exchange in ("NMS", "NYQ", "NASDAQ", "NYSE"):
-            score += 5
-        elif exchange in ("NSI", "NSE", "BSE"):
-            score += 5
-        elif exchange in ("LON", "FRA", "TSE"):
-            score += 2
-
-        scored.append((score, r))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0][1] if scored else None
+def score_match(r: dict, company_hint: str) -> int:
+    hint = (company_hint or "").lower().strip()
+    if not hint:
+        return 0
+    score = 0
+    if hint in r.get("longname", "").lower():
+        score += 10
+    elif hint in r.get("shortname", "").lower():
+        score += 8
+    if score and r.get("exchange", "").upper() in ("NMS", "NYQ", "NASDAQ", "NYSE", "NSI", "NSE", "BSE"):
+        score += 5
+    return score
 
 
-def resolve_ticker(query: str) -> Optional[TickerResult]:
-    """
-    Main entry point: resolve a natural language query to a stock ticker.
+def pick_best_match(results: list[dict], company_hint: str) -> tuple[Optional[dict], list[str]]:
+    """Best search result above the threshold (or None) plus up to 3 candidate symbols."""
+    scored = sorted(((score_match(r, company_hint), r) for r in results), key=lambda x: x[0], reverse=True)
+    good = [(s, r) for s, r in scored if s >= MIN_MATCH_SCORE]
+    candidates = [r["symbol"] for _, r in good[:3]]
+    return (good[0][1] if good else None), candidates
 
-    Steps:
-    1. LLM extracts company name and context from the query
-    2. If a clear ticker was mentioned, validate it exists via yfinance
-    3. Otherwise, search yfinance with the company name
-    4. Return the best match
 
-    Returns None if no resolution is possible.
-    """
-    # Step 1: LLM extraction
-    extracted = _llm_extract(query)
-    company_name = extracted.get("company_name", "").strip()
-    # Clean ticker: extract just the symbol part (e.g. "TTWO (NASDAQ)" → "TTWO")
-    raw_ticker = (extracted.get("ticker_if_known") or "").strip()
-    ticker_match = re.match(r'^([A-Z]{1,10}(?:\.NS|\.BO)?)', raw_ticker.upper())
-    known_ticker = ticker_match.group(1) if ticker_match else raw_ticker.upper().split()[0] if raw_ticker else ""
-    context = (extracted.get("context") or "").strip()
+def _currency(ticker: str, info: dict) -> str:
+    cur = info.get("currency")
+    if isinstance(cur, str) and cur:
+        return cur.upper()
+    return "INR" if ticker.endswith((".NS", ".BO")) else "USD"
 
-    # Step 2: If a ticker was explicitly mentioned, validate it
-    if known_ticker:
-        # Add exchange suffix for Indian stocks if needed
-        if not known_ticker.endswith((".NS", ".BO")):
-            # Check if company name suggests Indian stock
-            if any(ind in (company_name + " " + query).lower()
-                   for ind in ["india", "reliance", "tata", "infosys", "hdfc", "icici", "wipro"]):
-                known_ticker += ".NS"
 
-        try:
-            stock = yf.Ticker(known_ticker)
-            info = stock.info
-            if info and info.get("shortName"):
-                return TickerResult(
-                    ticker=known_ticker,
-                    company=info.get("longName", info.get("shortName", known_ticker)),
-                    exchange=info.get("exchange", "Unknown"),
-                    confidence="high",
-                    context=context,
-                    currency=_detect_currency(known_ticker, info.get("exchange", "")),
-                )
-        except Exception:
-            pass
+def _result(ticker: str, info: dict, confidence: str, context: str, source: str, candidates=None) -> TickerResult:
+    return TickerResult(
+        ticker=ticker,
+        company=info.get("longName") or info.get("shortName") or ticker,
+        exchange=info.get("exchange") or "Unknown",
+        confidence=confidence,
+        context=context,
+        currency=_currency(ticker, info),
+        source=source,
+        candidates=list(candidates or [ticker]),
+    )
 
-    # Step 3: Search yfinance with company name
+
+def resolve_ticker(
+    query: str,
+    settings: Optional[Settings] = None,
+    *,
+    lookup: Callable[[str], Optional[dict]] = lookup_info,
+    search: Callable[[str], list[dict]] = search_yahoo,
+) -> Optional[TickerResult]:
+    """Resolve a query to a validated ticker, or None when nothing is confidently identified."""
+    extracted = llm_extract(query, settings)
+    company_name = extracted["company_name"]
+    context = extracted["context"]
+    explicit = normalize_ticker(extracted["ticker_if_known"])
+
+    # 1. Explicit ticker from the LLM, validated; try the NSE listing for Indian companies.
+    if explicit:
+        tries = [explicit]
+        if "." not in explicit and any(h in company_name.lower() for h in INDIA_HINTS):
+            tries.append(f"{explicit}.NS")
+        for t in tries:
+            info = lookup(t)
+            if info:
+                return _result(t, info, "high", context, "llm_ticker")
+
+    # 2. Yahoo search on the extracted company name.
     if company_name:
-        search_results = _search_yfinance(company_name)
-        best = _pick_best_match(search_results, company_name)
+        best, candidates = pick_best_match(search(company_name), company_name)
         if best:
-            ticker = best["symbol"]
-            company = best.get("longname") or best.get("shortname") or ticker
-            exchange = best.get("exchange", "Unknown")
+            info = lookup(best["symbol"]) or {
+                "longName": best["longname"] or best["shortname"], "exchange": best["exchange"]
+            }
+            confidence = "high" if company_name.lower() in best["longname"].lower() else "medium"
+            return _result(best["symbol"], info, confidence, context, "yahoo_search", candidates)
 
-            # Determine confidence
-            confidence = "medium"
-            company_lower = company_name.lower()
-            if company_lower in (best.get("longname", "").lower()):
-                confidence = "high"
+    # 3. Static map on word boundaries.
+    for t in known_company_matches(query):
+        info = lookup(t)
+        if info:
+            return _result(t, info, "medium", context, "static_map")
 
-            return TickerResult(
-                ticker=ticker,
-                company=company,
-                exchange=exchange,
-                confidence=confidence,
-                context=context,
-                currency=_detect_currency(ticker, exchange),
-            )
-
-    # Step 4: Known company name fallback
-    known_ticker = _known_company_fallback(query)
-    if known_ticker:
-        try:
-            stock = yf.Ticker(known_ticker)
-            info = stock.info
-            if info and info.get("shortName"):
-                return TickerResult(
-                    ticker=known_ticker,
-                    company=info.get("longName", info.get("shortName", known_ticker)),
-                    exchange=info.get("exchange", "Unknown"),
-                    confidence="medium",
-                    context=context,
-                    currency=_detect_currency(known_ticker, info.get("exchange", "")),
-                )
-        except Exception:
-            pass
-
-    # Step 5: Regex fallback
-    fallback_ticker = _regex_fallback(query)
-    if fallback_ticker:
-        try:
-            stock = yf.Ticker(fallback_ticker)
-            info = stock.info
-            if info and info.get("shortName"):
-                return TickerResult(
-                    ticker=fallback_ticker,
-                    company=info.get("longName", info.get("shortName", fallback_ticker)),
-                    exchange=info.get("exchange", "Unknown"),
-                    confidence="low",
-                    context=context,
-                    currency=_detect_currency(fallback_ticker, info.get("exchange", "")),
-                )
-        except Exception:
-            pass
+    # 4. All-caps tokens that look like tickers (stopwords removed).
+    for t in regex_candidates(query):
+        info = lookup(t)
+        if info:
+            return _result(t, info, "low", context, "regex")
 
     return None
-
-
-def resolve_ticker_or_raise(query: str) -> TickerResult:
-    """Resolve ticker, raising ValueError if resolution fails."""
-    result = resolve_ticker(query)
-    if result is None:
-        raise ValueError(
-            f"Could not resolve a stock ticker from: '{query}'. "
-            "Please try using the explicit ticker symbol (e.g., TTWO, RELIANCE.NS)."
-        )
-    return result
-
-
-# Quick test
-if __name__ == "__main__":
-    test_queries = [
-        "Take Two before GTA 6",
-        "Nvidia",
-        "Reliance Industries",
-        "TSLA",
-        "I want to invest in Apple",
-        "Tata Motors",
-    ]
-    for q in test_queries:
-        result = resolve_ticker(q)
-        if result:
-            print(f"✅ '{q}' → {result} [confidence: {result.confidence}, context: {result.context}]")
-        else:
-            print(f"❌ '{q}' → No resolution found")

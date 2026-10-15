@@ -1,164 +1,144 @@
 """
-portfolio_allocator.py -- Budget-aware portfolio suggestions.
+portfolio_allocator.py -- Educational model allocation from a user profile.
 
-Takes a UserProfile and generates personalized stock/ETF recommendations
-with specific allocation amounts based on the user's budget, risk tolerance,
-and investment preferences.
+Weights come from ``portfolio.allocator`` (rule-based buckets + inverse volatility over a curated,
+Yahoo-verified universe) and are validated in code. The LLM only writes one-sentence rationales
+from the computed metrics; if it fails, template rationales are used and the allocation is unchanged.
 """
+from __future__ import annotations
+
 import json
-from openai import OpenAI
-import config
+import logging
+from typing import Callable, Optional
+
+import yfinance as yf
+
+from analytics.risk import annualized_volatility, daily_returns
+from errors import DataUnavailableError, LLMError
+from llm import Settings, complete
+from portfolio.allocator import BUCKET_WEIGHTS, build_allocation, validate_allocation
 from state import UserProfile
 
+log = logging.getLogger(__name__)
 
-PORTFOLIO_PROMPT = """You are the Chief Investment Officer creating a personalized investment portfolio.
+DISCLAIMER = (
+    "Educational model allocation produced by fixed rules (risk buckets + inverse volatility) from stated "
+    "preferences -- not personalized financial advice. Past volatility does not predict future returns."
+)
 
-User Profile:
-{profile}
-
-Generate a portfolio of exactly {num_positions} positions.
-
-For EACH position provide (use this exact JSON format):
-{{"ticker": "...", "company": "...", "allocation_pct": X, "amount": Y, "rationale": "...", "risk_level": "low/medium/high", "category": "ETF/Blue-Chip/Growth/Speculative"}}
-
-Also provide:
-- A "summary" section with total allocation, diversification notes
-- A "disclaimer" field
-
-Rules:
-1. Total allocation_pct must equal 100%
-2. All amounts must be in {currency}
-3. Allocate based on risk tolerance:
-   - Conservative: 60% ETFs/bonds, 40% blue-chip
-   - Moderate: 40% ETFs, 40% growth, 20% speculative
-   - Aggressive: 20% ETFs, 50% growth, 30% speculative
-4. Only suggest stocks available on the user's preferred markets
-5. Include the disclaimer: "This is general informational analysis, not personalized financial advice."
-
-Respond with ONLY a JSON object in this structure:
-{{
-  "positions": [...],
-  "summary": "...",
-  "disclaimer": "..."
-}}"""
+RATIONALE_PROMPT = """You write one-sentence, factual descriptions for positions in an educational model
+allocation. The weights are already fixed by rules; do not suggest changes or give buy/sell advice.
+Use only the metrics provided. Respond with ONLY a JSON object mapping each ticker to its sentence."""
 
 
-def _format_profile(profile: UserProfile) -> str:
-    """Format user profile for the LLM prompt."""
-    lines = []
-    lines.append(f"Location: {profile.get('location', 'Not specified')}")
-    lines.append(f"Currency: {profile.get('base_currency', 'Not specified')}")
-    lines.append(f"Budget: {profile.get('budget', 0):,.2f} {profile.get('base_currency', '')} ({profile.get('budget_type', 'Not specified')})")
-    lines.append(f"Risk Tolerance: {profile.get('risk_tolerance', 'Not specified')}")
-    lines.append(f"Investment Horizon: {profile.get('investment_horizon', 'Not specified')}")
-    lines.append(f"Goals: {', '.join(profile.get('goals', [])) or 'Not specified'}")
-    lines.append(f"Preferred Markets: {', '.join(profile.get('preferred_markets', [])) or 'All'}")
-    lines.append(f"Preferred Sectors: {', '.join(profile.get('preferred_sectors', [])) or 'Any'}")
-    lines.append(f"Number of Positions: {profile.get('num_positions', 5)}")
-    existing = profile.get("existing_investments", [])
-    if existing:
-        lines.append(f"Existing Investments: {json.dumps(existing)}")
-    return "\n".join(lines)
+def extract_json_object(text: str) -> dict:
+    """First JSON object in ``text`` (tolerates code fences and prose around it)."""
+    start = text.find("{")
+    if start < 0:
+        raise ValueError("no JSON object found")
+    obj, _ = json.JSONDecoder().raw_decode(text[start:])
+    if not isinstance(obj, dict):
+        raise ValueError("top-level JSON is not an object")
+    return obj
 
 
-def suggest_portfolio(profile: UserProfile) -> dict:
-    """
-    Generate portfolio suggestions based on user profile.
+def normalize_allocations(positions: list[dict], budget: float) -> list[dict]:
+    """Scale weights to sum to 100 and set amounts so they sum exactly to ``budget`` (2 dp)."""
+    total = sum(p["allocation_pct"] for p in positions)
+    result = []
+    for p in positions:
+        q = dict(p)
+        q["allocation_pct"] = round(p["allocation_pct"] * 100 / total, 2)
+        q["amount"] = round(budget * p["allocation_pct"] / total, 2)
+        result.append(q)
+    # put rounding residue on the largest position
+    big = max(result, key=lambda x: x["amount"])
+    big["amount"] = round(big["amount"] + budget - sum(x["amount"] for x in result), 2)
+    big["allocation_pct"] = round(big["allocation_pct"] + 100 - sum(x["allocation_pct"] for x in result), 2)
+    return result
 
-    Returns a dict with:
-    - positions: list of {ticker, company, allocation_pct, amount, rationale, risk_level, category}
-    - summary: diversification notes
-    - disclaimer: standard disclaimer
-    - total_amount: sum of all amounts
-    - currency: the currency used
-    """
-    num_positions = profile.get("num_positions", 5)
-    currency = profile.get("base_currency", "USD")
-    budget = profile.get("budget", 0)
 
-    # Suggest num positions based on budget (guideline)
-    if budget > 0:
-        if budget < 10000:
-            suggested = max(3, min(5, num_positions))
-        elif budget < 100000:
-            suggested = max(5, min(8, num_positions))
-        else:
-            suggested = max(8, min(12, num_positions))
-    else:
-        suggested = num_positions
-
-    profile_str = _format_profile(profile)
-
-    client = OpenAI(base_url=config.OPENAI_BASE_URL, api_key=config.OPENAI_API_KEY)
+def yahoo_volatility(ticker: str) -> Optional[float]:
+    """Annualised 1-year volatility from Yahoo closes, or None when unavailable."""
     try:
-        response = client.chat.completions.create(
-            model=config.LLM_MODEL,
-            messages=[
-                {"role": "system", "content": PORTFOLIO_PROMPT.format(
-                    profile=profile_str,
-                    num_positions=suggested,
-                    currency=currency,
-                )},
-                {"role": "user", "content": f"Generate my portfolio with {suggested} positions for a budget of {budget:,.2f} {currency}."},
-            ],
-            temperature=0.3,
-            max_tokens=3000,
-        )
-        text = response.choices[0].message.content or "{}"
-
-        # Parse JSON from response (handle markdown fences)
-        import re
-        text = text.strip()
-        text = re.sub(r'^```json\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        json_match = re.search(r'\{.*\}', text, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group(0))
-        else:
-            result = json.loads(text)
-
-        # Ensure required fields
-        result.setdefault("positions", [])
-        result.setdefault("summary", "Portfolio generated successfully.")
-        result.setdefault("disclaimer", "This is general informational analysis, not personalized financial advice.")
-        result["total_amount"] = budget
-        result["currency"] = currency
-        result["suggested_positions"] = suggested
-
-        return result
-
-    except Exception as e:
-        return {
-            "positions": [],
-            "summary": f"Error generating portfolio: {str(e)}",
-            "disclaimer": "This is general informational analysis, not personalized financial advice.",
-            "total_amount": budget,
-            "currency": currency,
-            "suggested_positions": suggested,
-        }
+        prices = yf.Ticker(ticker).history(period="1y")["Close"]
+        return annualized_volatility(daily_returns(prices))
+    except Exception as e:  # network/parse errors make the instrument ineligible, not fatal
+        log.info("volatility unavailable for %s: %s", ticker, e)
+        return None
 
 
-def modify_portfolio(current_portfolio: dict, remove_ticker: str, profile: UserProfile) -> dict:
-    """Remove a stock from the portfolio and reallocate its amount proportionally."""
-    positions = current_portfolio.get("positions", [])
-    remaining = [p for p in positions if p.get("ticker", "").upper() != remove_ticker.upper()]
+def template_rationale(p: dict) -> str:
+    return (f"{p['company']}: {p['category'].replace('_', '-')} holding; 1-year volatility "
+            f"{p['volatility_pct']:.1f}% (lower volatility receives more weight within its bucket).")
 
-    if not remaining:
-        return suggest_portfolio(profile)
 
-    # Get the amount to reallocate
-    removed = [p for p in positions if p.get("ticker", "").upper() == remove_ticker.upper()]
-    if removed:
-        freed_amount = removed[0].get("amount", 0)
-    else:
-        freed_amount = 0
+def _llm_rationales(positions: list[dict], profile: UserProfile, settings: Settings) -> dict[str, str]:
+    tickers = {p["ticker"] for p in positions}
 
-    # Redistribute proportionally
-    total_remaining_pct = sum(p.get("allocation_pct", 0) for p in remaining)
-    if total_remaining_pct > 0:
-        for p in remaining:
-            p["allocation_pct"] = round(p.get("allocation_pct", 0) * 100 / total_remaining_pct, 1)
-            p["amount"] = round(p.get("amount", 0) + freed_amount * (p["allocation_pct"] / 100), 2)
+    def validator(text: str) -> None:
+        obj = extract_json_object(text)
+        if not tickers <= set(obj) or not all(isinstance(obj[t], str) and obj[t].strip() for t in tickers):
+            raise ValueError("missing rationale for some tickers")
 
-    current_portfolio["positions"] = remaining
-    return current_portfolio
+    facts = [{k: p[k] for k in ("ticker", "company", "category", "allocation_pct", "volatility_pct")}
+             for p in positions]
+    result = complete(
+        settings,
+        [{"role": "system", "content": RATIONALE_PROMPT},
+         {"role": "user", "content": json.dumps({"risk_tolerance": profile.get("risk_tolerance"),
+                                                 "horizon": profile.get("investment_horizon"),
+                                                 "positions": facts})}],
+        validator=validator,
+        max_tokens=1500,
+    )
+    obj = extract_json_object(result.text)
+    return {t: str(obj[t]).strip()[:300] for t in tickers}
+
+
+def suggest_portfolio(
+    profile: UserProfile,
+    settings: Optional[Settings],
+    volatility: Callable[[str], Optional[float]] = yahoo_volatility,
+) -> dict:
+    """Return ``{positions, summary, disclaimer, total_amount, currency, rationale_source}``."""
+    budget = float(profile.get("budget") or 0)
+    if budget <= 0:
+        raise ValueError("Profile budget must be positive.")
+    risk = profile.get("risk_tolerance") or "moderate"
+    n = int(profile.get("num_positions") or 5)
+    markets = profile.get("preferred_markets") or []
+    currency = profile.get("base_currency") or "USD"
+
+    try:
+        raw = build_allocation(risk, n, markets, volatility)
+    except ValueError as e:
+        raise DataUnavailableError(f"Cannot build allocation: {e}") from e
+    positions = normalize_allocations(raw, budget)
+    validate_allocation(positions, budget, markets)
+
+    source = "template"
+    rationales: dict[str, str] = {}
+    if settings is not None:
+        try:
+            rationales = _llm_rationales(positions, profile, settings)
+            source = "llm"
+        except LLMError as e:
+            log.warning("rationale generation failed; using templates: %s", e)
+    for p in positions:
+        p["rationale"] = rationales.get(p["ticker"]) or template_rationale(p)
+
+    weights = ", ".join(f"{b.replace('_', '-')} {w:.0f}%" for b, w in BUCKET_WEIGHTS[risk].items())
+    per = " per month" if profile.get("budget_type") == "monthly" else ""
+    summary = (f"Rule-based {risk} mix ({weights}) across {len(positions)} instruments; within each bucket, "
+               f"weights are inverse to 1-year volatility. Amounts are in {currency}{per}.")
+    if len(positions) < n:
+        summary += f" Only {len(positions)} eligible instruments were available for the selected markets."
+    return {
+        "positions": positions,
+        "summary": summary,
+        "disclaimer": DISCLAIMER,
+        "total_amount": round(sum(p["amount"] for p in positions), 2),
+        "currency": currency,
+        "rationale_source": source,
+    }
