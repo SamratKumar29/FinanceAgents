@@ -1,0 +1,337 @@
+{
+ "date": "2026-10-16",
+ "fixtures_recorded_at": "2026-10-15",
+ "resolver": {
+  "current": {
+   "n": 99,
+   "accuracy_pct": 79.8,
+   "per_category_accuracy_pct": {
+    "company_name": 66.7,
+    "contextual": 100.0,
+    "delisted": 100.0,
+    "explicit_ticker": 88.0,
+    "share_class": 33.3,
+    "trap": 100.0
+   },
+   "no_answer_false_positive_pct": 0.0,
+   "abstain_pct": 36.4,
+   "errors": [
+    {
+     "query": "HDFCBANK.NS loan growth",
+     "expected": "HDFCBANK.NS",
+     "got": null,
+     "category": "explicit_ticker"
+    },
+    {
+     "query": "Gold ETF in India GOLDBEES.NS",
+     "expected": "GOLDBEES.NS",
+     "got": null,
+     "category": "explicit_ticker"
+    },
+    {
+     "query": "NIFTYBEES.NS for passive investing",
+     "expected": "NIFTYBEES.NS",
+     "got": null,
+     "category": "explicit_ticker"
+    },
+    {
+     "query": "Coca-Cola dividend",
+     "expected": "KO",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Johnson & Johnson talc lawsuits",
+     "expected": "JNJ",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "JPMorgan Chase earnings",
+     "expected": "JPM",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Broadcom AI chips",
+     "expected": "AVGO",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Palantir government contracts",
+     "expected": "PLTR",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Coinbase regulation",
+     "expected": "COIN",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Bajaj Finance loan book",
+     "expected": "BAJFINANCE.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Bharti Airtel tariffs",
+     "expected": "BHARTIARTL.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Titan jewellery demand",
+     "expected": "TITAN.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Hindustan Unilever volumes",
+     "expected": "HINDUNILVR.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Tata Consultancy Services deals",
+     "expected": "TCS.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Eternal formerly Zomato",
+     "expected": "ETERNAL.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Tata Power renewables",
+     "expected": "TATAPOWER.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Adani Enterprises debt",
+     "expected": "ADANIENT.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Vanguard Total Bond Market fund",
+     "expected": "BND",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Berkshire Hathaway class B",
+     "expected": "BRK-B",
+     "got": null,
+     "category": "share_class"
+    },
+    {
+     "query": "BRK-B valuation",
+     "expected": "BRK-B",
+     "got": null,
+     "category": "share_class"
+    }
+   ]
+  },
+  "baseline": {
+   "n": 99,
+   "accuracy_pct": 70.7,
+   "per_category_accuracy_pct": {
+    "company_name": 60.0,
+    "contextual": 100.0,
+    "delisted": 0.0,
+    "explicit_ticker": 96.0,
+    "share_class": 0.0,
+    "trap": 60.0
+   },
+   "no_answer_false_positive_pct": 43.8,
+   "abstain_pct": 30.3,
+   "errors": [
+    {
+     "query": "Gold ETF in India GOLDBEES.NS",
+     "expected": "GOLDBEES.NS",
+     "got": null,
+     "category": "explicit_ticker"
+    },
+    {
+     "query": "Electronic Arts outlook",
+     "expected": null,
+     "got": "EA",
+     "category": "delisted"
+    },
+    {
+     "query": "Tata Motors commercial vehicles",
+     "expected": "TMCV.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Tata Motors Passenger Vehicles EV plans",
+     "expected": "TMPV.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Tata Steel outlook",
+     "expected": "TATASTEEL.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Coca-Cola dividend",
+     "expected": "KO",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Johnson & Johnson talc lawsuits",
+     "expected": "JNJ",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "JPMorgan Chase earnings",
+     "expected": "JPM",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Broadcom AI chips",
+     "expected": "AVGO",
+     "got": "AI",
+     "category": "company_name"
+    },
+    {
+     "query": "Palantir government contracts",
+     "expected": "PLTR",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Coinbase regulation",
+     "expected": "COIN",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Bajaj Finance loan book",
+     "expected": "BAJFINANCE.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Bharti Airtel tariffs",
+     "expected": "BHARTIARTL.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Titan jewellery demand",
+     "expected": "TITAN.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Hindustan Unilever volumes",
+     "expected": "HINDUNILVR.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Tata Consultancy Services deals",
+     "expected": "TCS.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Eternal formerly Zomato",
+     "expected": "ETERNAL.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Tata Power renewables",
+     "expected": "TATAPOWER.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Adani Enterprises debt",
+     "expected": "ADANIENT.NS",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "Vanguard Total Bond Market fund",
+     "expected": "BND",
+     "got": null,
+     "category": "company_name"
+    },
+    {
+     "query": "pineapple futures",
+     "expected": null,
+     "got": "AAPL",
+     "category": "trap"
+    },
+    {
+     "query": "Are metals a good hedge?",
+     "expected": null,
+     "got": "META",
+     "category": "trap"
+    },
+    {
+     "query": "Is the USD getting stronger?",
+     "expected": null,
+     "got": "USD",
+     "category": "trap"
+    },
+    {
+     "query": "How do IPO lockups work?",
+     "expected": null,
+     "got": "IPO",
+     "category": "trap"
+    },
+    {
+     "query": "best AI stocks",
+     "expected": null,
+     "got": "AI",
+     "category": "trap"
+    },
+    {
+     "query": "apples and oranges comparison",
+     "expected": null,
+     "got": "AAPL",
+     "category": "trap"
+    },
+    {
+     "query": "Berkshire Hathaway class B",
+     "expected": "BRK-B",
+     "got": null,
+     "category": "share_class"
+    },
+    {
+     "query": "BRK.B outlook",
+     "expected": "BRK-B",
+     "got": null,
+     "category": "share_class"
+    },
+    {
+     "query": "BRK-B valuation",
+     "expected": "BRK-B",
+     "got": null,
+     "category": "share_class"
+    }
+   ]
+  }
+ },
+ "constraints": {
+  "n": 144,
+  "pass_rate_pct": 100.0,
+  "failures": []
+ }
+}

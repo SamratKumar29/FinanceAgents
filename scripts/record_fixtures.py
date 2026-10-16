@@ -1,7 +1,8 @@
 """
 scripts/record_fixtures.py -- Record Yahoo Finance payloads used by the offline tests.
 
-    python scripts/record_fixtures.py            # writes tests/fixtures/*.json
+    python scripts/record_fixtures.py            # writes src/financeagents/data/fixtures/*.json
+    python scripts/record_fixtures.py CEO GTA    # record specific symbols only
 
 Only the fields the app reads are stored. Re-run to refresh; commit the result together with the
 date shown in each file's "recorded_at".
@@ -14,7 +15,7 @@ from pathlib import Path
 import yfinance as yf
 
 BASE_TICKERS = ["AAPL", "TTWO", "NVDA", "RELIANCE.NS", "INFY.NS", "^GSPC", "^NSEI", "ZZZZINVALID"]
-UNIVERSE = json.loads((Path(__file__).resolve().parents[1] / "portfolio" / "universe.json").read_text())
+UNIVERSE = json.loads((Path(__file__).resolve().parents[1] / "src" / "financeagents" / "portfolio" / "universe.json").read_text())
 TICKERS = list(dict.fromkeys(BASE_TICKERS + [i["ticker"] for i in UNIVERSE["instruments"]]))
 INFO_KEYS = [
     "shortName", "longName", "exchange", "currency", "financialCurrency", "sector", "industry",
@@ -28,7 +29,7 @@ STATEMENT_ROWS = {
     "balance_sheet": ["Total Assets", "Total Debt", "Stockholders Equity", "Cash And Cash Equivalents"],
     "cashflow": ["Operating Cash Flow", "Free Cash Flow", "Capital Expenditure"],
 }
-OUT = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
+OUT = Path(__file__).resolve().parents[1] / "src" / "financeagents" / "data" / "fixtures"
 
 
 def _clean(v):
@@ -69,7 +70,7 @@ def record(symbol: str) -> dict:
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
-    for s in TICKERS:
+    for s in sys.argv[1:] or TICKERS:
         d = record(s)
         path = OUT / f"{s.replace('^', '_')}.json"
         path.write_text(json.dumps(d, indent=1, sort_keys=True) + "\n", encoding="utf-8")

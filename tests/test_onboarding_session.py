@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from onboarding import (
+from financeagents.onboarding import (
     FIELDS,
     apply_answer,
     is_complete,
@@ -12,8 +12,8 @@ from onboarding import (
     parse_horizon_years,
     parse_location,
 )
-from session import get_profile_summary, load_session_from_str, save_session
-from state import empty_profile
+from financeagents.session import get_profile_summary, load_session_from_str, save_session
+from financeagents.state import empty_profile
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -108,3 +108,9 @@ def test_bad_uploads_raise_value_error_without_touching_filesystem(payload, monk
 def test_oversized_upload_rejected():
     with pytest.raises(ValueError, match="too large"):
         load_session_from_str(json.dumps({"user_profile": {}, "pad": "x" * 70_000}))
+
+
+def test_horizon_minimum_matches_message():
+    with pytest.raises(ValueError):
+        parse_horizon_years("0.5 months")
+    assert parse_horizon_years("1 month") == pytest.approx(1 / 12)

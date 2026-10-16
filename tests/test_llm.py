@@ -3,14 +3,14 @@ import openai
 import pytest
 from conftest import FakeLLMClient, response
 
-from errors import (
+from financeagents.errors import (
     ConfigError,
     LLMAuthError,
     LLMBudgetError,
     LLMRequestError,
     LLMUnavailableError,
 )
-from llm import DEFAULT_BASE_URL, Settings, complete, parse_model_list, resolve_settings
+from financeagents.llm import DEFAULT_BASE_URL, Settings, complete, parse_model_list, resolve_settings
 
 _REQ = httpx2.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
 
@@ -91,7 +91,7 @@ def test_exhausted_chain_raises_with_reasons_and_respects_cap():
 
 
 def test_sdk_retries_disabled_and_timeout_set():
-    from llm import make_client
+    from financeagents.llm import make_client
 
     c = make_client(settings(timeout_s=12))
     assert c.max_retries == 0 and c.timeout == 12
@@ -139,3 +139,16 @@ def test_sessions_are_independent():
 def test_bad_numeric_env_is_config_error():
     with pytest.raises(ConfigError):
         Settings.from_env({"LLM_MAX_ATTEMPTS": "four"})
+
+
+def test_404_model_not_found_falls_back():
+    client = FakeLLMClient({"a": [status_error(404)], "b": ["ok"]})
+    assert complete(settings(), MSGS, client_factory=client.factory).text == "ok"
+
+
+def test_server_key_sessions_limited_to_configured_models():
+    server = Settings(api_key="server-secret", model="cheap", fallback_models=("cheap-2",))
+    assert resolve_settings(server, user_model="cheap-2").model == "cheap-2"
+    with pytest.raises(ConfigError, match="operator-configured"):
+        resolve_settings(server, user_model="openai/gpt-4o")
+    assert resolve_settings(server, user_api_key="mine", user_model="openai/gpt-4o").model == "openai/gpt-4o"

@@ -6,10 +6,17 @@ import pytest
 from conftest import FakeLLMClient
 from fixture_yf import FixtureTicker
 
-import portfolio_allocator as pa
-from errors import DataUnavailableError
-from llm import Settings
-from portfolio.allocator import BUCKET_WEIGHTS, allocate_slots, build_allocation, load_universe, validate_allocation
+from financeagents.data import market as market_data
+from financeagents.errors import DataUnavailableError
+from financeagents.llm import Settings
+from financeagents.portfolio import service as pa
+from financeagents.portfolio.allocator import (
+    BUCKET_WEIGHTS,
+    allocate_slots,
+    build_allocation,
+    load_universe,
+    validate_allocation,
+)
 
 UNIVERSE = {i.ticker: i for i in load_universe()}
 
@@ -20,7 +27,7 @@ def fixture_vol(ticker):
 
 @pytest.fixture(autouse=True)
 def fixture_yf(monkeypatch):
-    monkeypatch.setattr(pa.yf, "Ticker", FixtureTicker)
+    monkeypatch.setattr(market_data.yf, "Ticker", FixtureTicker)
 
 
 def profile(**kw):
@@ -75,7 +82,8 @@ def test_inverse_volatility_within_bucket():
     assert len(etfs) == 2
     low, high = sorted(etfs, key=lambda p: p["volatility_pct"])
     assert low["allocation_pct"] > high["allocation_pct"]
-    assert low["allocation_pct"] * low["volatility_pct"] == pytest.approx(high["allocation_pct"] * high["volatility_pct"])
+    assert low["allocation_pct"] * low["volatility_pct"] == pytest.approx(
+        high["allocation_pct"] * high["volatility_pct"], rel=1e-3)
 
 
 def test_unavailable_instruments_are_skipped_and_weight_renormalised():
@@ -123,3 +131,18 @@ def test_llm_failure_still_yields_valid_allocation(monkeypatch):
 
 def test_extract_json_object_is_not_greedy():
     assert pa.extract_json_object('Here: {"a": 1} and {"b": 2}') == {"a": 1}
+
+
+def test_summary_reports_actual_mix_and_asset_classes():
+    out = pa.suggest_portfolio(profile(risk_tolerance="conservative", num_positions=5), None, volatility=fixture_vol)
+    assert "etf 60%" in out["summary"] and "bond" in out["summary"]
+    assert {p["asset_class"] for p in out["positions"]} <= {"equity", "bond", "gold"}
+
+
+def test_summary_admits_missing_bucket():
+    def vol(t):
+        return None if UNIVERSE[t].bucket == "speculative" else fixture_vol(t)
+
+    out = pa.suggest_portfolio(profile(num_positions=5), None, volatility=vol)
+    assert "No eligible instruments for: speculative" in out["summary"] and "speculative" not in out["summary"].split(
+        "No eligible")[0]

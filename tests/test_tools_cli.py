@@ -1,13 +1,14 @@
 import math
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import APP_PATH
 
-import main
-import tools
-from errors import DataUnavailableError, LLMAuthError
+from financeagents import cli as main
+from financeagents.data import market as market_data
+from financeagents.data import tools
+from financeagents.errors import DataUnavailableError, LLMAuthError
 
 
 class FakeTicker:
@@ -43,7 +44,7 @@ def _walk(obj):
 
 @pytest.fixture
 def fake_yf(monkeypatch):
-    monkeypatch.setattr(tools.yf, "Ticker", lambda s: FakeTicker(s))
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda s: FakeTicker(s))
 
 
 def test_payloads_typed_with_as_of_and_no_nan_strings(fake_yf):
@@ -62,11 +63,11 @@ def test_payloads_typed_with_as_of_and_no_nan_strings(fake_yf):
     assert risk["benchmark"] == "^GSPC" and risk["observations"] == 259
     assert fin["income_statement"]["net_income"] is None and fin["balance_sheet"] is None
     assert "earnings_estimate_current_quarter" not in est
-    assert est["trailing_quarterly_earnings_growth_yoy"] == 0.1
+    assert est["trailing_quarterly_earnings_growth_yoy_pct"] == 10.0
 
 
 def test_empty_history_raises_data_unavailable(monkeypatch):
-    monkeypatch.setattr(tools.yf, "Ticker", lambda s: FakeTicker(s, empty=True))
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda s: FakeTicker(s, empty=True))
     with pytest.raises(DataUnavailableError):
         tools.get_market_data("XXXX", info={})
     with pytest.raises(DataUnavailableError):
@@ -91,7 +92,7 @@ def test_streamlit_key_field_is_never_prefilled(monkeypatch):
     from streamlit.testing.v1 import AppTest
 
     monkeypatch.setenv("LLM_API_KEY", "SERVER-SENTINEL-KEY")
-    at = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30).run()
+    at = AppTest.from_file(APP_PATH, default_timeout=30).run()
     assert not at.exception
     key_input = next(t for t in at.text_input if t.label == "API Key")
     assert key_input.value == ""
@@ -103,7 +104,7 @@ def test_streamlit_onboarding_generates_portfolio_once(monkeypatch):
     pytest.importorskip("streamlit.testing.v1")
     from streamlit.testing.v1 import AppTest
 
-    import portfolio_allocator
+    from financeagents.portfolio import service as portfolio_allocator
 
     calls = []
 
@@ -116,7 +117,7 @@ def test_streamlit_onboarding_generates_portfolio_once(monkeypatch):
 
     monkeypatch.setattr(portfolio_allocator, "suggest_portfolio", fake_suggest)
     monkeypatch.setenv("LLM_API_KEY", "SERVER-SENTINEL-KEY")
-    at = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30).run()
+    at = AppTest.from_file(APP_PATH, default_timeout=30).run()
     next(b for b in at.button if "Investment Mode" in b.label).click().run()
     answers = ["India", "5 lakh", "lumpsum", "retirement", "moderate", "10 years", "4", "india", "none"]
     for a in answers:
@@ -127,3 +128,29 @@ def test_streamlit_onboarding_generates_portfolio_once(monkeypatch):
     at.run()  # any later rerun (e.g. clicking Download) must not regenerate
     at.run()
     assert len(calls) == 1
+
+
+def test_all_nan_closes_are_data_unavailable(monkeypatch):
+    class NanTicker(FakeTicker):
+        def history(self, period="1y"):
+            return pd.DataFrame({"Close": [np.nan, np.nan]}, index=pd.bdate_range("2026-01-01", periods=2))
+
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda s: NanTicker(s))
+    with pytest.raises(DataUnavailableError):
+        tools.get_market_data("X", info={})
+    with pytest.raises(DataUnavailableError):
+        tools.convert_currency(1, "USD", "INR")
+
+
+def test_first_usable_value_falls_back_when_primary_is_none():
+    assert tools._first({"currentPrice": None, "regularMarketPrice": 12.5}, "currentPrice", "regularMarketPrice") == 12.5
+
+
+def test_minor_currency_units(monkeypatch):
+    class FX(FakeTicker):
+        def history(self, period="1y"):
+            return pd.DataFrame({"Close": [1.25]}, index=pd.bdate_range("2026-01-01", periods=1))
+
+    monkeypatch.setattr(market_data.yf, "Ticker", lambda s: FX(s))
+    assert tools.convert_currency(1000, "GBp", "GBP")["converted"] == 10.0
+    assert tools.convert_currency(1000, "GBp", "USD")["converted"] == pytest.approx(12.5)

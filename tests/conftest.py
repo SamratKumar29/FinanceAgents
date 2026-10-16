@@ -1,13 +1,38 @@
 """Offline test fixtures: no network, no .env, scripted LLM client."""
 import os
 import socket
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+APP_PATH = str(Path(__file__).resolve().parents[1] / "src" / "financeagents" / "ui" / "app.py")
+
 os.environ["FINANCEAGENTS_SKIP_DOTENV"] = "1"
 for _k in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "FALLBACK_MODELS", "LLM_MAX_ATTEMPTS", "LLM_TIMEOUT_S"):
     os.environ.pop(_k, None)
+
+
+@pytest.fixture(autouse=True)
+def fresh_market_cache(monkeypatch):
+    from financeagents.data import market as market_data
+
+    market_data.clear_cache()
+    monkeypatch.setattr(market_data, "sleep", lambda s: None)
+    yield
+    market_data.clear_cache()
+
+
+@pytest.fixture(autouse=True)
+def no_web_search(monkeypatch):
+    """Web search would hit the network; tests that need it patch tools.web_search explicitly."""
+    from financeagents.data import tools
+    from financeagents.errors import DataUnavailableError
+
+    def offline(query, max_results=5):
+        raise DataUnavailableError("web search disabled in tests")
+
+    monkeypatch.setattr(tools, "web_search", offline)
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +85,7 @@ def fake_llm():
 @pytest.fixture
 def patch_llm(monkeypatch):
     """Route every ``llm.complete`` call through a FakeLLMClient."""
-    import llm
+    from financeagents import llm
 
     def install(client):
         monkeypatch.setattr(llm, "make_client", client.factory)
@@ -70,8 +95,10 @@ def patch_llm(monkeypatch):
             kw["client_factory"] = client.factory
             return original(settings, messages, **kw)
 
-        for mod in ("llm", "graph", "ticker_resolver", "portfolio_allocator"):
-            m = __import__(mod)
+        from financeagents import pipeline, resolver
+        from financeagents.portfolio import service
+
+        for m in (llm, pipeline, resolver, service):
             if hasattr(m, "complete"):
                 monkeypatch.setattr(m, "complete", patched)
         return client

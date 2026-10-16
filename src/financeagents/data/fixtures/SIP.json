@@ -1,0 +1,13 @@
+{
+ "close": {},
+ "info": {
+  "exchange": "NMS",
+  "fiftyTwoWeekHigh": 0.01,
+  "fiftyTwoWeekLow": 0.01,
+  "trailingPegRatio": null
+ },
+ "recorded_at": "2026-10-16T04:08:52+00:00",
+ "statements": {},
+ "symbol": "SIP",
+ "tz": null
+}

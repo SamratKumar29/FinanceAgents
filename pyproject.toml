@@ -1,13 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "financeagents"
 version = "0.3.0"
-description = "LLM-assisted stock briefs and educational model portfolios"
+description = "Data-grounded stock briefs and educational model allocations (LangGraph + Yahoo Finance)"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Samrat Kumar" }]
 requires-python = ">=3.11,<3.13"
+dependencies = [
+    "langgraph>=1.0,<2",
+    "openai>=1.40,<4",
+    "yfinance>=0.2.40,<2",
+    "numpy>=1.24,<3",
+    "pandas>=2.0,<4",
+    "pydantic>=2.5,<3",
+    "python-dotenv>=1.0,<2",
+    "streamlit>=1.30,<2",
+    "ddgs>=9.0,<10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+financeagents = "financeagents.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+financeagents = ["portfolio/universe.json", "data/fixtures/*.json", "demo_data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-pythonpath = ["."]
+pythonpath = ["tests", "."]
 
 [tool.ruff]
 line-length = 120
@@ -15,3 +46,10 @@ extend-exclude = ["venv", ".cortex"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["financeagents", "evaluation"]
+
+[tool.ruff.lint.per-file-ignores]
+# Evaluation scripts set FINANCEAGENTS_SKIP_DOTENV before importing the package.
+"evaluation/*.py" = ["E402"]

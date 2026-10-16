@@ -1,0 +1,5 @@
+{
+ "resolver_accuracy_pct": 83.8,
+ "set_on": "2026-10-16",
+ "note": "Deterministic resolver stages only (no LLM, no Yahoo search), evaluation/resolver_queries.csv n=99, fixtures recorded 2026-10-15."
+}

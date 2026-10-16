@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-import ticker_resolver as tr
-from errors import LLMAuthError
-from llm import Settings
+from financeagents import resolver as tr
+from financeagents.errors import LLMAuthError
+from financeagents.llm import Settings
 
 LISTED = {
     "AAPL": {"shortName": "Apple Inc.", "longName": "Apple Inc.", "exchange": "NMS", "currency": "USD"},
@@ -101,3 +101,39 @@ def test_llm_auth_error_propagates(patch_llm, fake_llm):
     patch_llm(fake_llm({"m": [status_error(401)]}))
     with pytest.raises(LLMAuthError):
         tr.resolve_ticker("apple", Settings(api_key="bad", model="m"), lookup=lookup, search=no_search)
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("HDFCBANK.NS loan growth", ["HDFCBANK.NS"]), ("NIFTYBEES.NS for passive", ["NIFTYBEES.NS"]),
+    ("BRK-B valuation", ["BRK-B"]), ("BRK.B outlook", ["BRK-B"]), ("Is the CEO of Apple good?", []),
+    ("LONGWORDHERE is not a ticker", []),
+])
+def test_regex_candidates(query, expected):
+    assert tr.regex_candidates(query) == expected
+
+
+def test_search_skips_unvalidated_match_and_tries_next(patch_llm, fake_llm):
+    s = _with_llm(patch_llm, fake_llm, json.dumps({"company_name": "Take-Two", "ticker_if_known": "", "context": ""}))
+    results = [
+        {"symbol": "TTWO.DELISTED", "shortname": "Take-Two", "longname": "Take-Two Interactive Software, Inc.",
+         "exchange": "NMS"},
+        {"symbol": "TTWO", "shortname": "Take-Two", "longname": "Take-Two Interactive Software, Inc.",
+         "exchange": "NMS"},
+    ]
+    r = tr.resolve_ticker("take-two?", s, lookup=lookup, search=lambda name: results)
+    assert r.ticker == "TTWO" and r.source == "yahoo_search"
+
+
+def test_search_with_no_valid_match_falls_through_to_static_map(patch_llm, fake_llm):
+    s = _with_llm(patch_llm, fake_llm, json.dumps({"company_name": "Apple", "ticker_if_known": "", "context": ""}))
+    bad = [{"symbol": "APPL.GONE", "shortname": "Apple", "longname": "Apple Gone Inc", "exchange": "NMS"}]
+    r = tr.resolve_ticker("apple", s, lookup=lookup, search=lambda name: bad)
+    assert r.ticker == "AAPL" and r.source == "static_map"
+
+
+def test_module_level_search_can_be_swapped(monkeypatch, patch_llm, fake_llm):
+    s = _with_llm(patch_llm, fake_llm, json.dumps({"company_name": "Meta", "ticker_if_known": "", "context": ""}))
+    monkeypatch.setattr(tr, "lookup_info", lookup)
+    monkeypatch.setattr(tr, "search_yahoo", lambda name: [
+        {"symbol": "META", "shortname": "Meta", "longname": "Meta Platforms, Inc.", "exchange": "NMS"}])
+    assert tr.resolve_ticker("meta?", s).ticker == "META"

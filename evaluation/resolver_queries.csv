@@ -1,0 +1,100 @@
+query,expected,category
+AAPL,AAPL,explicit_ticker
+Should I buy NVDA now?,NVDA,explicit_ticker
+TSLA outlook for next year,TSLA,explicit_ticker
+thoughts on MSFT dividends,MSFT,explicit_ticker
+Is AMZN overvalued?,AMZN,explicit_ticker
+GOOGL vs the market,GOOGL,explicit_ticker
+How risky is PLTR?,PLTR,explicit_ticker
+AMD after earnings,AMD,explicit_ticker
+COIN and crypto prices,COIN,explicit_ticker
+JPM interest rate exposure,JPM,explicit_ticker
+Is KO a safe stock?,KO,explicit_ticker
+PG for a conservative investor,PG,explicit_ticker
+JNJ litigation risk,JNJ,explicit_ticker
+AVGO valuation,AVGO,explicit_ticker
+TTWO before GTA 6,TTWO,explicit_ticker
+VTI for retirement,VTI,explicit_ticker
+BND as a hedge,BND,explicit_ticker
+Is VOO better than VTI?,VOO,explicit_ticker
+RELIANCE.NS outlook,RELIANCE.NS,explicit_ticker
+INFY.NS after results,INFY.NS,explicit_ticker
+TCS.NS hiring slowdown,TCS.NS,explicit_ticker
+HDFCBANK.NS loan growth,HDFCBANK.NS,explicit_ticker
+ITC.NS demerger,ITC.NS,explicit_ticker
+Gold ETF in India GOLDBEES.NS,GOLDBEES.NS,explicit_ticker
+NIFTYBEES.NS for passive investing,NIFTYBEES.NS,explicit_ticker
+Tell me about Apple,AAPL,company_name
+I want to invest in Apple,AAPL,company_name
+apple stock,AAPL,company_name
+Is Nvidia a buy?,NVDA,company_name
+nvidia earnings next week,NVDA,company_name
+What do you think of Tesla?,TSLA,company_name
+tesla delivery numbers,TSLA,company_name
+Microsoft cloud growth,MSFT,company_name
+Is Amazon still growing?,AMZN,company_name
+Google antitrust case,GOOGL,company_name
+Alphabet search revenue,GOOGL,company_name
+Facebook ad revenue,META,company_name
+Meta Platforms capex,META,company_name
+Take Two Interactive valuation,TTWO,company_name
+take-two stock,TTWO,company_name
+Rockstar Games parent company stock,TTWO,company_name
+Electronic Arts outlook,,delisted
+Reliance Industries Jio IPO,RELIANCE.NS,company_name
+reliance retail growth,RELIANCE.NS,company_name
+Infosys guidance cut,INFY.NS,company_name
+Tata Motors commercial vehicles,TMCV.NS,company_name
+Tata Motors Passenger Vehicles EV plans,TMPV.NS,company_name
+Tata Steel outlook,TATASTEEL.NS,company_name
+HDFC Bank merger effects,HDFCBANK.NS,company_name
+ICICI Bank results,ICICIBANK.NS,company_name
+Wipro margins,WIPRO.NS,company_name
+BYD electric cars,1211.HK,company_name
+Sony PlayStation sales,SONY,company_name
+Nintendo Switch 2 demand,NTDOY,company_name
+Ubisoft takeover rumours,UBI.PA,company_name
+Samsung Electronics memory prices,005930.KS,company_name
+Coca-Cola dividend,KO,company_name
+Johnson & Johnson talc lawsuits,JNJ,company_name
+JPMorgan Chase earnings,JPM,company_name
+Broadcom AI chips,AVGO,company_name
+Palantir government contracts,PLTR,company_name
+Coinbase regulation,COIN,company_name
+Bajaj Finance loan book,BAJFINANCE.NS,company_name
+Bharti Airtel tariffs,BHARTIARTL.NS,company_name
+Titan jewellery demand,TITAN.NS,company_name
+Hindustan Unilever volumes,HINDUNILVR.NS,company_name
+Tata Consultancy Services deals,TCS.NS,company_name
+Eternal formerly Zomato,ETERNAL.NS,company_name
+Tata Power renewables,TATAPOWER.NS,company_name
+Adani Enterprises debt,ADANIENT.NS,company_name
+Vanguard Total Bond Market fund,BND,company_name
+I was thinking of investing in Take Two before GTA 6 launch,TTWO,contextual
+Is the CEO of Apple good?,AAPL,contextual
+what is the PE of BYD,1211.HK,contextual
+Should I hold Nvidia through the AI boom?,NVDA,contextual
+Is Tesla's EPS growth sustainable?,TSLA,contextual
+Apple vs the S&P 500 ETF,AAPL,contextual
+How did Reliance do in Q2?,RELIANCE.NS,contextual
+Infosys ADR or NSE listing?,INFY.NS,contextual
+my SIP in Infosys,INFY.NS,contextual
+Microsoft's AI capex and ROI,MSFT,contextual
+pineapple futures,,trap
+Are metals a good hedge?,,trap
+I think ETF is safer,,trap
+What is a good PE ratio?,,trap
+Should I start a SIP?,,trap
+Explain EBITDA,,trap
+Is the USD getting stronger?,,trap
+How do IPO lockups work?,,trap
+best AI stocks,,trap
+what is NAV,,trap
+Is GDP growth slowing in the US?,,trap
+apples and oranges comparison,,trap
+my CEO said to buy bonds,,trap
+FY results season tips,,trap
+Should I BUY or SELL now?,,trap
+Berkshire Hathaway class B,BRK-B,share_class
+BRK.B outlook,BRK-B,share_class
+BRK-B valuation,BRK-B,share_class

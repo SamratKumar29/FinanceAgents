@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from analytics.risk import (
+from financeagents.analytics.risk import (
     MARKETS,
     annualized_volatility,
     beta,
@@ -81,3 +81,41 @@ def test_daily_returns_drop_duplicate_dates_and_nans():
     s = pd.Series([1.0, np.nan, 2.0, 2.0], index=pd.to_datetime(["2025-01-01", "2025-01-02", "2025-01-03",
                                                                   "2025-01-03"]))
     assert daily_returns(s).tolist() == [1.0]
+
+
+def _yields(values, end="2026-10-15"):
+    return pd.Series(values, index=pd.bdate_range(end=end, periods=len(values), tz="America/Chicago"))
+
+
+def test_live_rate_used_when_fresh_and_labelled():
+    from financeagents.analytics.risk import live_rate_from_yield
+
+    live = live_rate_from_yield(_yields([4.0, 4.088]), "^IRX", today=pd.Timestamp("2026-10-16"))
+    assert live[0] == pytest.approx(0.04088) and "^IRX close 4.088% on 2026-10-15 (live)" == live[1]
+    assert risk_free_rate(MARKETS["US"], {}, live) == live
+
+
+def test_stale_or_absurd_live_rate_falls_back_to_default():
+    from financeagents.analytics.risk import live_rate_from_yield
+
+    assert live_rate_from_yield(_yields([4.0]), "^IRX", today=pd.Timestamp("2026-12-01")) is None
+    assert live_rate_from_yield(_yields([400.0]), "^IRX", today=pd.Timestamp("2026-10-16")) is None
+    assert live_rate_from_yield(None, "^IRX") is None
+    rate, src = risk_free_rate(MARKETS["US"], {}, None)
+    assert rate == 0.04 and "default" in src
+
+
+def test_env_override_beats_live_rate():
+    rate, src = risk_free_rate(MARKETS["US"], {"RISK_FREE_RATE_US": "0.05"}, (0.041, "live"))
+    assert rate == 0.05 and "override" in src
+
+
+def test_india_has_no_live_symbol():
+    assert MARKETS["IN"].rf_symbol is None and MARKETS["US"].rf_symbol == "^IRX"
+
+
+def test_malformed_risk_free_override_is_config_error():
+    from financeagents.errors import ConfigError
+
+    with pytest.raises(ConfigError):
+        risk_free_rate(MARKETS["US"], {"RISK_FREE_RATE_US": "four percent"})

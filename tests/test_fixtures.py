@@ -1,4 +1,4 @@
-"""Tests against recorded Yahoo Finance payloads (tests/fixtures, see scripts/record_fixtures.py)."""
+"""Tests against recorded Yahoo Finance payloads (src/financeagents/data/fixtures, see scripts/record_fixtures.py)."""
 import json
 import math
 
@@ -6,12 +6,13 @@ import pytest
 from conftest import FakeLLMClient
 from fixture_yf import FixtureTicker, load
 
-import graph
-import ticker_resolver
-import tools
-from errors import DataUnavailableError
-from llm import Settings
-from state import initial_state
+from financeagents import pipeline as graph
+from financeagents import resolver as ticker_resolver
+from financeagents.data import market as market_data
+from financeagents.data import tools
+from financeagents.errors import DataUnavailableError
+from financeagents.llm import Settings
+from financeagents.state import initial_state
 
 TICKERS = ["AAPL", "TTWO", "NVDA", "RELIANCE.NS", "INFY.NS"]
 
@@ -19,9 +20,8 @@ TICKERS = ["AAPL", "TTWO", "NVDA", "RELIANCE.NS", "INFY.NS"]
 @pytest.fixture(autouse=True)
 def fixture_yf(monkeypatch):
     FixtureTicker.instances.clear()
-    monkeypatch.setattr(tools.yf, "Ticker", FixtureTicker)
-    monkeypatch.setattr(ticker_resolver.yf, "Ticker", FixtureTicker)
-
+    monkeypatch.setattr(market_data.yf, "Ticker", FixtureTicker)
+    
 
 def _scalars(obj):
     if isinstance(obj, dict):
@@ -62,7 +62,7 @@ def test_invalid_ticker_is_data_unavailable():
 
 def test_full_analysis_on_fixtures_fetches_info_once_and_grounds_prompt(monkeypatch):
     client = FakeLLMClient(default="BRIEF")
-    import llm
+    from financeagents import llm
 
     original = llm.complete
     monkeypatch.setattr(graph, "complete", lambda s, m, **kw: original(s, m, client_factory=client.factory, **kw))
@@ -73,7 +73,8 @@ def test_full_analysis_on_fixtures_fetches_info_once_and_grounds_prompt(monkeypa
 
     out = graph.build_graph(settings, resolver=resolver).invoke(initial_state("What about Reliance Industries?"))
     assert out["ticker"] == "RELIANCE.NS" and out["data_gaps"] == []
-    assert sum(t.info_reads for t in FixtureTicker.instances if t.symbol == "RELIANCE.NS") == 2  # resolver + run
+    # resolver and analysis share one cached info fetch
+    assert sum(t.info_reads for t in FixtureTicker.instances if t.symbol == "RELIANCE.NS") == 1
     payload = json.loads(client.calls[0]["messages"][1]["content"].split("\n", 1)[1])
     price = payload["tool_data"]["market_data"]["current_price"]
     assert price == load("RELIANCE.NS")["info"].get("currentPrice")

@@ -1,10 +1,10 @@
 import pytest
 
-import graph
-from errors import DataUnavailableError, LLMUnavailableError, TickerNotResolvedError
-from llm import Settings
-from state import initial_state
-from ticker_resolver import TickerResult
+from financeagents import pipeline as graph
+from financeagents.errors import DataUnavailableError, LLMUnavailableError, TickerNotResolvedError
+from financeagents.llm import Settings
+from financeagents.resolver import TickerResult
+from financeagents.state import initial_state
 
 S = Settings(api_key="k", model="m", fallback_models=("m2",))
 
@@ -94,3 +94,30 @@ def test_llm_failure_is_raised_not_returned_as_brief(patch_llm, fake_llm):
     patch_llm(fake_llm({"m": [status_error(429)], "m2": [status_error(503)]}))
     with pytest.raises(LLMUnavailableError):
         graph.build_graph(S, resolver=resolver(), data=FakeData()).invoke(initial_state("q"))
+
+
+def test_brief_numbers_are_checked_against_payload(patch_llm, fake_llm):
+    patch_llm(fake_llm(default="Price is 10.00 and beta 1.1; revenue grew 83.7%."))
+    out = graph.build_graph(S, resolver=resolver(), data=FakeData()).invoke(initial_state("q"))
+    assert out["faithfulness"]["numbers_checked"] == 3
+    assert [u["raw"] for u in out["faithfulness"]["unsupported"]] == ["83.7%"]
+
+
+def test_cited_web_numbers_are_supported_and_bad_data_is_a_gap(patch_llm, fake_llm):
+    from pydantic import ValidationError
+
+    from financeagents.schemas import RiskMetrics
+
+    class WebData(FakeData):
+        def web_search(self, q):
+            return [{"title": "t", "url": "https://n.example/a", "snippet": "shipments rose 37.5% last quarter"}]
+
+        def compute_risk(self, t):
+            RiskMetrics.model_validate({"ticker": t})  # raises ValidationError, like malformed upstream data
+            raise AssertionError("unreachable")
+
+    patch_llm(fake_llm(default="Shipments rose 37.5% (https://n.example/a)."))
+    out = graph.build_graph(S, resolver=resolver("shipments"), data=WebData()).invoke(initial_state("q"))
+    assert out["faithfulness"]["unsupported"] == []
+    assert out["data_gaps"] == ["risk_metrics"]
+    assert issubclass(ValidationError, Exception)

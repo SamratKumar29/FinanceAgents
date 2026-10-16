@@ -1,40 +1,41 @@
-# Virtual environments
-venv/
-venv
-.venv/
-.venv
-
-# Environment variables (contains API keys)
+# --- Secrets & personal data -------------------------------------------------
 .env
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-dist/
-build/
-
-# Streamlit
+.env.*
+!.env.example
 .streamlit/secrets.toml
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Build docs (not for repo)
-BUILD_GUIDE.md
-plan.md
-
-# IDE
-.vscode/
-.idea/
-
-# Personal data written by the CLI (--save)
 profile.json
 *_profile.json
 
-# Tooling
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# --- Virtual environments ----------------------------------------------------
+venv/
+.venv/
+env/
+
+# --- Tooling caches ----------------------------------------------------------
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Editors / OS ------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Local agent / scratch files ---------------------------------------------
 .cortex/
+BUILD_GUIDE.md
+plan.md
